@@ -38,78 +38,15 @@ typedef struct {
 } DNSAnswer;
 #pragma pack(pop)
 
-void aur_get(char* buffer) {
-    printf("%s\n", buffer);
-}
-
-
-// 解析 QNAME 域名
-int parse_qname(const unsigned char* buffer, int offset, char* out) {
-    int pos = offset;
-    int jumped = 0;
-    int jump_pos = 0;
-    char* ptr = out;
-
-    while (1) {
-        unsigned char len = buffer[pos];
-
-        if (len == 0) {
-            pos++;
-            break;
-        }
-
-        // 检查压缩指针（高两位为 11）
-        if ((len & 0xC0) == 0xC0) {
-            if (!jumped) jump_pos = pos + 2;
-            int pointer = ((len & 0x3F) << 8) | buffer[pos + 1];
-            pos = pointer;
-            jumped = 1;
-            continue;
-        }
-
-        pos++;
-        for (int i = 0; i < len; i++) {
-            *ptr++ = buffer[pos++];
-        }
-        *ptr++ = '.';
+void print_hex(const unsigned char* data, int len) {
+    for (int i = 0; i < len; i++) {
+        printf("%02x ", data[i]);
+        if ((i + 1) % 16 == 0) printf("\n");
     }
-
-    if (ptr != out) *(ptr - 1) = '\0'; // 去掉最后一个点
-    else *ptr = '\0';
-
-    return jumped ? jump_pos : pos;
+    printf("\n");
 }
 
-// 解析 Answer 区
-void parse_answers(const unsigned char* buffer, int offset, int ancount) {
-    int pos = offset;
 
-    for (int i = 0; i < ancount; i++) {
-        char name[256] = { 0 };
-        int name_end = parse_qname(buffer, pos, name);
-        pos = name_end;
-
-        DNSAnswer* answer = (DNSAnswer*)&buffer[pos];
-        uint16_t type = ntohs(answer->type);
-        uint16_t rdlen = ntohs(answer->rdlength);
-        pos += sizeof(DNSAnswer);
-
-        printf("  [响应] 类型=%d, 名称=%s\n", type, name);
-
-        if (type == 1 && rdlen == 4) {  // A记录
-            struct in_addr addr;
-            memcpy(&addr, &buffer[pos], 4);
-            printf("      A记录 IP: %s\n", inet_ntoa(addr));
-        }
-        else if (type == 5) {         // CNAME
-            char cname[256] = { 0 };
-            parse_qname(buffer, pos, cname);
-            printf("      CNAME: %s\n", cname);
-        }
-
-        pos += rdlen;
-    }
-}
 
 int main() {
     WSADATA wsaData;
@@ -132,7 +69,7 @@ int main() {
     localAddr.sin_port = htons(LOCAL_PORT);
 
     if (bind(sockfd, (struct sockaddr*) & localAddr, sizeof(localAddr)) == SOCKET_ERROR) {
-        fprintf(stderr, "端口绑定失败，尝试以管理员身份运行\n");
+        fprintf(stderr, "端口绑定失败\n");
         closesocket(sockfd);
         WSACleanup();
         return 1;
@@ -151,18 +88,14 @@ int main() {
             (struct sockaddr*) & clientAddr, &addrLen);
         if (recvLen == SOCKET_ERROR) continue;
 
-        aur_get(buffer);
+        //TODO 只从QUERYS字段开始
+        printf("%d \n", recvLen);
+        print_hex((const unsigned char*)buffer, recvLen);
+        printf("%c\n", buffer[13]);
 
         DNSHeader* dns = (DNSHeader*)buffer;
 
-        if (ntohs(dns->qdcount) > 0) {
-            char domain[256] = { 0 };
-            int qname_end = parse_qname((unsigned char*)buffer, sizeof(DNSHeader), domain);
-            DNSQuestion* q = (DNSQuestion*)&buffer[qname_end];
-
-            printf("[请求] ID=%04x 查询: %s, 类型=%d\n",
-                ntohs(dns->id), domain, ntohs(q->type));
-        }
+       
 
         // 转发到上游 DNS
         sendto(sockfd, buffer, recvLen, 0,
@@ -178,8 +111,8 @@ int main() {
             ntohs(resp->id),
             ntohs(resp->flags) & 0x000F,
             ntohs(resp->ancount));
+        print_hex((const unsigned char*)buffer, respLen);
 
-        parse_answers((unsigned char*)buffer, recvLen - (respLen - sizeof(DNSHeader)), ntohs(resp->ancount));
 
         // 转发回客户端
         sendto(sockfd, buffer, respLen, 0, (struct sockaddr*) & clientAddr, addrLen);
