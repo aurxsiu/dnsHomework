@@ -15,30 +15,45 @@
 #define BUFFER_SIZE 512
 
 #pragma pack(push, 1)
-typedef struct {
-    uint16_t id;
-    uint16_t flags;
+
+#pragma pack(pop)
+
+typedef struct HEADER
+{
+    unsigned id : 16;
+    unsigned rd : 1;
+    unsigned tc : 1;
+    unsigned aa : 1;
+    unsigned qr : 1;
+    unsigned opcode : 4;
+    unsigned rcode : 4;
+    unsigned cd : 1;
+    unsigned ad : 1;
+    unsigned z : 1;
+    unsigned ra : 1;
     uint16_t qdcount;
     uint16_t ancount;
-    uint16_t nscount;
     uint16_t arcount;
-} DNSHeader;
+    uint16_t nscount;
+}HEADER;
 
 typedef struct Question
 {
     char qname[256];
     uint16_t qtype;
     uint16_t qclass;
-}DNSQuestion;
+}Question;
 
-typedef struct {
+typedef struct ResourceRecord
+{
+    uint16_t name;
     uint16_t type;
-    uint16_t _class;
-    uint32_t ttl;
-    uint16_t rdlength;
-    // 后面是变长 rdata
-} DNSAnswer;
-#pragma pack(pop)
+    uint16_t rClass;
+    uint16_t ttl;
+    uint16_t rd_length;
+    uint32_t rdata;
+}ResourceRecord;
+
 
 void print_hex(const unsigned char* data, int len) {
     for (int i = 0; i < len; i++) {
@@ -48,7 +63,6 @@ void print_hex(const unsigned char* data, int len) {
     printf("\n");
 }
 
-
 uint16_t get16bit(uint8_t** buf)
 {
     uint16_t rec;
@@ -56,7 +70,6 @@ uint16_t get16bit(uint8_t** buf)
     *buf = *buf + 2;
     return ntohs(rec);
 }
-
 char* getquestion(Question* question, char buf[])
 {
     int i = 0;
@@ -72,13 +85,12 @@ char* getquestion(Question* question, char buf[])
     question->qclass = get16bit((uint8_t**)&buf);
     return buf;
 }
-
 char* getName(char qname[]) {
     int index = 1;
     int realIndex = 0;
     char* realName = (char*)malloc(256);
     memset(realName, 0, 256);
-    while(qname[index]!=0){
+    while (qname[index] != 0) {
         if (qname[index] >= '0' && qname[index] <= 'z') {
             realName[realIndex] = qname[index];
             realIndex++;
@@ -92,10 +104,6 @@ char* getName(char qname[]) {
     return realName;
 }
 
-//todo
-int* search(char* realName) {
-    return NULL;
-}
 
 
 int main() {
@@ -139,39 +147,18 @@ int main() {
         if (recvLen == SOCKET_ERROR) continue;
 
         //TODO 只从QUERYS字段开始
-        printf("get\n");
-        printf("recvLen: %d \n", recvLen);
+        printf("%d \n", recvLen);
         print_hex((const unsigned char*)buffer, recvLen);
 
-
-
-        DNSHeader* dns = (DNSHeader*)buffer;
-
-        printf("报头id：%u    ", ntohs(dns->id));
-        printf("源ip地址：%s\n", inet_ntoa(clientAddr.sin_addr));
-        
-        DNSQuestion question;
-        uint8_t* offset = (uint8_t*)getquestion(&question, buffer + 12);
-
-        printf("name: %s,type: %d,class: %d", question.qname,question.qtype,question.qclass);
-
-        //只处理A
-        if (question.qtype == 1) {
-            char* name = getName(question.qname);
-            printf("realName: %s\n", name);
-            int* searchIp = search(name);
-
-
-
-
-
+        //处理
+        HEADER* recv_package;
+        recv_package = (HEADER*)buffer;
+        if (recvLen > 0)
+        {
+            Question question;
+            uint8_t* offset = (uint8_t*)getquestion(&question, buffer + 12);
 
         }
-
-        
-
-
-
 
 
 
@@ -193,12 +180,12 @@ int main() {
         int respLen = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, NULL, NULL);
         if (respLen == SOCKET_ERROR) continue;
 
-        DNSHeader* resp = (DNSHeader*)buffer;
+        /*DNSHeader* resp = (DNSHeader*)buffer;
 
         printf("[响应] ID=%04x, RCODE=%d, Answer数=%d\n",
             ntohs(resp->id),
             ntohs(resp->flags) & 0x000F,
-            ntohs(resp->ancount));
+            ntohs(resp->ancount));*/
         print_hex((const unsigned char*)buffer, respLen);
 
 
@@ -210,6 +197,3 @@ int main() {
     WSACleanup();
     return 0;
 }
-
-
-
