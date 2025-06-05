@@ -24,10 +24,12 @@ typedef struct {
     uint16_t arcount;
 } DNSHeader;
 
-typedef struct {
-    uint16_t type;
-    uint16_t _class;
-} DNSQuestion;
+typedef struct Question
+{
+    char qname[256];
+    uint16_t qtype;
+    uint16_t qclass;
+}DNSQuestion;
 
 typedef struct {
     uint16_t type;
@@ -46,6 +48,54 @@ void print_hex(const unsigned char* data, int len) {
     printf("\n");
 }
 
+
+uint16_t get16bit(uint8_t** buf)
+{
+    uint16_t rec;
+    memcpy(&rec, *buf, 2);
+    *buf = *buf + 2;
+    return ntohs(rec);
+}
+
+char* getquestion(Question* question, char buf[])
+{
+    int i = 0;
+    while (*buf != 0)
+    {
+        question->qname[i] = *buf;
+        buf++;
+        i++;
+    }
+    question->qname[i] = 0;
+    buf++;
+    question->qtype = get16bit((uint8_t**)&buf);
+    question->qclass = get16bit((uint8_t**)&buf);
+    return buf;
+}
+
+char* getName(char qname[]) {
+    int index = 1;
+    int realIndex = 0;
+    char* realName = (char*)malloc(256);
+    memset(realName, 0, 256);
+    while(qname[index]!=0){
+        if (qname[index] >= '0' && qname[index] <= 'z') {
+            realName[realIndex] = qname[index];
+            realIndex++;
+        }
+        else {
+            realName[realIndex] = '.';
+            realIndex++;
+        }
+        index++;
+    }
+    return realName;
+}
+
+//todo
+int* search(char* realName) {
+    return NULL;
+}
 
 
 int main() {
@@ -89,13 +139,51 @@ int main() {
         if (recvLen == SOCKET_ERROR) continue;
 
         //TODO 只从QUERYS字段开始
-        printf("%d \n", recvLen);
+        printf("get\n");
+        printf("recvLen: %d \n", recvLen);
         print_hex((const unsigned char*)buffer, recvLen);
-        printf("%c\n", buffer[13]);
+
+
 
         DNSHeader* dns = (DNSHeader*)buffer;
 
-       
+        printf("报头id：%u    ", ntohs(dns->id));
+        printf("源ip地址：%s\n", inet_ntoa(clientAddr.sin_addr));
+        
+        DNSQuestion question;
+        uint8_t* offset = (uint8_t*)getquestion(&question, buffer + 12);
+
+        printf("name: %s,type: %d,class: %d", question.qname,question.qtype,question.qclass);
+
+        //只处理A
+        if (question.qtype == 1) {
+            char* name = getName(question.qname);
+            printf("realName: %s\n", name);
+            int* searchIp = search(name);
+
+
+
+
+
+
+        }
+
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         // 转发到上游 DNS
         sendto(sockfd, buffer, recvLen, 0,
@@ -122,3 +210,6 @@ int main() {
     WSACleanup();
     return 0;
 }
+
+
+
