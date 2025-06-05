@@ -36,7 +36,7 @@ typedef struct ResourceRecord
     uint16_t name;
     uint16_t type;
     uint16_t rrclass;
-    uint16_t ttl;
+    uint32_t ttl;
     uint16_t rd_length;
     uint32_t rdata;
 }ResourceRecord;
@@ -103,8 +103,8 @@ void aurPrint(const char* promt,char* str) {
     printf("%s: %s\n", promt, str);
 }
 
-int lookup_ip_as_int(char* domain) {
-    /*const char* filename = "";
+uint32_t lookup_ip_as_int(char* domain) {
+    const char* filename = "C:\\Users\\aurxsiu\\Desktop\\dns.txt";
     FILE* file = fopen(filename, "r");
     if (!file) {
         perror("fopen");
@@ -120,6 +120,7 @@ int lookup_ip_as_int(char* domain) {
 
         if (sscanf(line, "%s %s", ip_str, name) == 2) {
             if (strcmp(name, domain) == 0) {
+                printf("search result: %s", ip_str);
                 uint32_t ip = inet_addr(ip_str);
                 return ip;
             }
@@ -127,14 +128,16 @@ int lookup_ip_as_int(char* domain) {
     }
 
     fclose(file);
-    return -1;*/
     return -1;
 }
 
 int main() {
+    struct sockaddr_in* log = (struct sockaddr_in*)malloc(65536 * sizeof(struct sockaddr_in));
+
+
     WSADATA wsaData;
     SOCKET sockfd;
-    struct sockaddr_in localAddr, clientAddr, dnsServerAddr;
+    struct sockaddr_in localAddr, clientAddr, dnsServerAddr,acceptAddr;
     int addrLen = sizeof(struct sockaddr_in);
     char buffer[BUFFER_SIZE];
 
@@ -151,7 +154,12 @@ int main() {
     localAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
     localAddr.sin_port = htons(LOCAL_PORT);
 
-    if (bind(sockfd, (struct sockaddr*) & localAddr, sizeof(localAddr)) == SOCKET_ERROR) {
+    memset(&acceptAddr, 0, sizeof(acceptAddr));
+    acceptAddr.sin_family = AF_INET;
+    acceptAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    acceptAddr.sin_port = htons(LOCAL_PORT);
+
+    if (bind(sockfd, (struct sockaddr*) & acceptAddr, sizeof(acceptAddr)) == SOCKET_ERROR) {
         fprintf(stderr, "端口绑定失败\n");
         closesocket(sockfd);
         WSACleanup();
@@ -180,7 +188,7 @@ int main() {
         if (recvLen == SOCKET_ERROR) continue;
 
         if (strcmp("127.0.0.1", inet_ntoa(clientAddr.sin_addr)) == 0) {
-            printf("get message from local\n");
+            printf("get message from local %s\n", inet_ntoa(clientAddr.sin_addr));
             printf("recvLen: %d \n", recvLen);
             print_hex((const unsigned char*)buffer, recvLen);
 
@@ -189,7 +197,9 @@ int main() {
             DNSHeader* dns = (DNSHeader*)buffer;
 
             printf("报头id：%u    ", ntohs(dns->id));
-            printf("源ip地址：%s\n", inet_ntoa(clientAddr.sin_addr));
+            printf("源ip地址：%s %d\n", inet_ntoa(clientAddr.sin_addr),clientAddr.sin_port);
+
+            log[dns->id] = clientAddr;
 
             DNSQuestion question;
             uint8_t* offset = (uint8_t*)getquestion(&question, buffer + 12);
@@ -198,42 +208,55 @@ int main() {
             printf("realName: %s\n", name);
 
             //只处理A
-            //if (question.qtype == 1) {
+            if (question.qtype == 1) {
 
-            //    int searchIp = lookup_ip_as_int(name);
+                uint32_t searchIp = lookup_ip_as_int(name);
 
-            //    printf("search_ip: %d", searchIp);
+                printf("search_ip: %d", searchIp);
 
 
 
-            //    if (searchIp > 0) {
-            //        printf("使用本地文件返回响应\n");
+                if ((int)searchIp > 0) {
+                    printf("查询到地址,使用本地文件返回响应\n");
 
-            //        //flags不管
-            //        dns->ancount = ntohs(1);
+                    //flags不管
+                    dns->ancount = ntohs(1);
+                    dns->flags = dns->flags+128;
 
-            //        static const int A_NAME_OFFSET = 0xC00C;
-            //        static const uint16_t A_TYPE = 1;
-            //        static const uint16_t IN_CLASS = 1;
-            //        static const uint16_t A_RDLENGTH = 4;
-            //        static const uint32_t ttl = 86400;
+                    static const int A_NAME_OFFSET = 0xC00C;
+                    static const uint16_t A_TYPE = 1;
+                    static const uint16_t IN_CLASS = 1;
+                    static const uint16_t A_RDLENGTH = 4;
+                    static const uint32_t ttl = 86400;
 
-            //        ResourceRecord answer;
-            //        answer.name = htons(A_NAME_OFFSET);
-            //        answer.type = htons(A_TYPE);
-            //        answer.rrclass = htons(IN_CLASS);
-            //        *(uint32_t*)&answer.ttl = htonl(ttl);
-            //        answer.rd_length = htons(A_RDLENGTH);
-            //        answer.rdata = searchIp;
-            //        memcpy(offset, (uint8_t*)(&answer), 16);
-            //        int new_len = recvLen + 16;
+                    ResourceRecord answer;
+                    answer.name = htons(A_NAME_OFFSET);
+                    answer.type = htons(A_TYPE);
+                    answer.rrclass = htons(IN_CLASS);
+                    *(uint32_t*)&answer.ttl = htonl(ttl);
+                    answer.rd_length = htons(A_RDLENGTH);
+                    answer.rdata = searchIp;
+                    printf("%d\n", sizeof(answer));
+                    memcpy(offset, (uint8_t*)(&answer), sizeof(answer));
+                    int new_len = recvLen + sizeof(answer);
 
-            //        print_hex((const unsigned char*)buffer, new_len);
+                    print_hex((const unsigned char*)buffer, new_len);
 
-            //        sendto(sockfd, buffer, new_len, 0, (struct sockaddr*) & clientAddr, addrLen);
-            //        continue;
-            //    }
-            //}
+                    sendto(sockfd, buffer, new_len, 0, (struct sockaddr*) & clientAddr, addrLen);
+                    continue;
+                }
+                else {
+                    if(searchIp==0){
+                        printf("查询到0.0.0.0\n");
+                        dns->flags += 768;
+                        dns->flags += 128;
+                        print_hex((const unsigned char*)buffer, recvLen);
+                        sendto(sockfd, buffer, recvLen , 0, (struct sockaddr*) & clientAddr, addrLen);
+                        continue;
+                    }
+                }
+            }
+
 
             // 转发到上游 DNS
             sendto(sockfd, buffer, recvLen, 0,
@@ -252,8 +275,10 @@ int main() {
             print_hex((const unsigned char*)buffer, recvLen);
 
 
+            struct sockaddr_in to_return = log[resp->id];
+
             // 转发回客户端
-            sendto(sockfd, buffer, recvLen, 0, (struct sockaddr*) & localAddr, sizeof(localAddr));
+            sendto(sockfd, buffer, recvLen, 0, (struct sockaddr*) & to_return, sizeof(to_return));
         }
        
     }
