@@ -40,6 +40,13 @@ typedef struct ResourceRecord
     uint16_t rd_length;
     uint32_t rdata;
 }ResourceRecord;
+
+//接收请求,获取id,用id为序,保存MeLo,修改id为管理版本,转发,
+typedef struct MessageLog {
+    struct sockaddr_in clientAddress;
+    uint16_t id;
+};
+
 #pragma pack(pop)
 
 void print_hex(const unsigned char* data, int len) {
@@ -126,6 +133,63 @@ uint32_t lookup_ip_as_int(char* domain) {
     return -1;
 }
 
+
+
+typedef struct LOG {
+    uint32_t ip;
+    char* domain;
+}LOG;
+LOG* logs = (LOG*)malloc(65536 * sizeof(LOG));
+int size = 0;
+void add_log(uint32_t ip,char* domain) {
+    LOG* new_log = (LOG*)malloc(sizeof(LOG));
+    new_log->ip = ip;
+    new_log->domain = domain;
+    logs[size] = *new_log;
+    size++;
+    return;
+}
+uint32_t get_ip(char* domain) {
+    for (int a = 0; a < size; a++) {
+        LOG log = logs[a];
+        if (strcmp(domain, log.domain) == 0) {
+            return log.ip;
+        }
+    }
+    return -1;
+}
+
+uint16_t current_id = 0;
+struct MessageLog* mlogs = (MessageLog*)malloc(65536 * sizeof(MessageLog));
+uint16_t add_current_id() {
+    current_id++;
+    if (current_id == 256) {
+        current_id = 0;
+    }
+    return current_id;
+}
+
+
+//id为local_id
+void sendToDns(SOCKET socket,char* buffer,int len,int flags,const sockaddr* to,int tolen,uint16_t id, sockaddr_in client,DNSHeader* header) {
+    printf("currentManagedId: %d\n", current_id);
+    uint16_t get_id = add_current_id();
+    struct MessageLog new_message_log;
+    new_message_log.clientAddress = client; new_message_log.id = id;
+    mlogs[get_id] = new_message_log;
+    header->id = get_id;
+    sendto(socket, buffer, len, flags, to, tolen);
+    printf("发送完毕");
+}
+
+//id为dns_id || managed_id
+void sendToLocalFromDns(SOCKET socket, char* buffer, int len, int flags,DNSHeader* header,uint16_t id){
+    struct MessageLog get_message_log = mlogs[id];
+    header->id = get_message_log.id;
+
+    sendto(socket, buffer, len, flags, (struct sockaddr*)&(get_message_log.clientAddress), sizeof(get_message_log.clientAddress));
+}
+
 int main() {
     struct sockaddr_in* log = (struct sockaddr_in*)malloc(65536 * sizeof(struct sockaddr_in));
 
@@ -181,8 +245,10 @@ int main() {
         int recvLen = recvfrom(sockfd, buffer, BUFFER_SIZE, 0,
             (struct sockaddr*) & clientAddr, &addrLen);
         if (recvLen == SOCKET_ERROR) continue;
-
-        if (strcmp("114.114.114.114", inet_ntoa(clientAddr.sin_addr)) == 0) {
+        if (strcmp("10.29.221.78", inet_ntoa(clientAddr.sin_addr)) == 0) {
+            continue;   
+        }
+        if (strcmp("114.114.114.114", inet_ntoa(clientAddr.sin_addr)) == 0) {//默认通过114.114.114.114接收响应
             printf("get message from %s\n", inet_ntoa(clientAddr.sin_addr));
 
             DNSHeader* resp = (DNSHeader*)buffer;
@@ -191,18 +257,51 @@ int main() {
                 ntohs(resp->id),
                 ntohs(resp->flags) & 0x000F,
                 ntohs(resp->ancount));
-            print_hex((const unsigned char*)buffer, recvLen);
+            //print_hex((const unsigned char*)buffer, recvLen);
 
+            DNSQuestion question;
+            uint8_t* offset = (uint8_t*)getquestion(&question, buffer + 12);
 
+            uint16_t record_num = ntohs(resp->ancount);
+            ResourceRecord* record = (ResourceRecord*)offset;
+            for(int a = 0;a<record_num;a++){
+                printf("record%d:\n", a);
+                uint16_t type = ntohs(record->type);
+                printf("record type: %d\n", type);
+                if (type == 1) {
+                    uint32_t ip = record->rdata;
+                    //printf("ip: %d\n", ip);
+                    char* name = getName(question.qname);
+                    //printf("realName: %s\n", name);
+                    char* nameCopy = (char*)malloc(30 * sizeof(char));
+                    strcpy(nameCopy, name);
+                    add_log(ip, nameCopy);
+                    printf("存储ip-domain: %d-%s\n", ip, name);
+                }
+
+                uint16_t* len_p = (uint16_t*)(&(record->rd_length));
+                uint16_t len = get16bit((uint8_t**)(&len_p));
+                //printf("record len: %d\n", len);
+                record = (ResourceRecord*)((uint8_t*)record + 16 + (len - 4));
+            }
+
+   
+            
+            
+            
+                
             struct sockaddr_in to_return = log[resp->id];
 
-            // 转发回客户端
-            sendto(sockfd, buffer, recvLen, 0, (struct sockaddr*) & to_return, sizeof(to_return));
+            //// 转发回客户端
+            //sendto(sockfd, buffer, recvLen, 0, (struct sockaddr*) & to_return, sizeof(to_return));
+            
+            sendToLocalFromDns(sockfd, buffer, recvLen, 0, resp, resp->id);
+            printf("发送回客户端\n");
         }
-        else {//默认通过114.114.114.114接收响应
+        else {
             printf("get message from local %s\n", inet_ntoa(clientAddr.sin_addr));
             printf("recvLen: %d \n", recvLen);
-            print_hex((const unsigned char*)buffer, recvLen);
+            //print_hex((const unsigned char*)buffer, recvLen);
 
 
 
@@ -211,22 +310,24 @@ int main() {
             printf("报头id：%u    ", ntohs(dns->id));
             printf("源ip地址：%s %d\n", inet_ntoa(clientAddr.sin_addr), clientAddr.sin_port);
 
-            log[dns->id] = clientAddr;
+            
 
             DNSQuestion question;
             uint8_t* offset = (uint8_t*)getquestion(&question, buffer + 12);
 
             char* name = getName(question.qname);
             printf("realName: %s\n", name);
+            printf("type: %d\n", question.qtype);
 
             //只处理A
             if (question.qtype == 1) {
 
                 uint32_t searchIp = lookup_ip_as_int(name);
 
-                printf("search_ip: %d", searchIp);
 
-
+                if (searchIp == -1) {
+                    searchIp = get_ip(name);
+                }
 
                 if ((int)searchIp != 0&&(int)searchIp != -1) {
                     printf("查询到地址,使用本地文件返回响应\n");
@@ -264,15 +365,19 @@ int main() {
                         dns->flags += 128;
                         print_hex((const unsigned char*)buffer, recvLen);
                         sendto(sockfd, buffer, recvLen, 0, (struct sockaddr*) & clientAddr, addrLen);
+
+
                         continue;
                     }
                 }
             }
 
-
+            printf("未在内存中或文件中查询到ip,查询dns\n");
             // 转发到上游 DNS
-            sendto(sockfd, buffer, recvLen, 0,
-                (struct sockaddr*) & dnsServerAddr, sizeof(dnsServerAddr));
+            /*sendto(sockfd, buffer, recvLen, 0,
+                (struct sockaddr*) & dnsServerAddr, sizeof(dnsServerAddr));*/
+            sendToDns(sockfd, buffer, recvLen, 0, (struct sockaddr*) & dnsServerAddr, sizeof(dnsServerAddr), dns->id, clientAddr, dns);
+
             continue;
         }
        

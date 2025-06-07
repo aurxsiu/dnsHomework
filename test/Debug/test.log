@@ -1,2 +1,3 @@
 ﻿  dns.cpp
+D:\workspace\creations\vs\test\test\dns.cpp(48,2): warning C4091: “typedef ”: 没有声明变量时忽略“MessageLog”的左侧
   test.vcxproj -> D:\workspace\creations\vs\test\Debug\test.exe
