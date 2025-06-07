@@ -94,11 +94,6 @@ char* getName(char qname[]) {
     return realName;
 }
 
-//todo ip转为10进制
-int search(char* realName) {
-    return NULL;
-}
-
 void aurPrint(const char* promt,char* str) {
     printf("%s: %s\n", promt, str);
 }
@@ -139,7 +134,7 @@ int main() {
     SOCKET sockfd;
     struct sockaddr_in localAddr, clientAddr, dnsServerAddr,acceptAddr;
     int addrLen = sizeof(struct sockaddr_in);
-    char buffer[BUFFER_SIZE];
+    char buffer[BUFFER_SIZE];   
 
     WSAStartup(MAKEWORD(2, 2), &wsaData);
 
@@ -187,7 +182,24 @@ int main() {
             (struct sockaddr*) & clientAddr, &addrLen);
         if (recvLen == SOCKET_ERROR) continue;
 
-        if (strcmp("127.0.0.1", inet_ntoa(clientAddr.sin_addr)) == 0) {
+        if (strcmp("114.114.114.114", inet_ntoa(clientAddr.sin_addr)) == 0) {
+            printf("get message from %s\n", inet_ntoa(clientAddr.sin_addr));
+
+            DNSHeader* resp = (DNSHeader*)buffer;
+
+            printf("[响应] ID=%04x, RCODE=%d, Answer数=%d\n",
+                ntohs(resp->id),
+                ntohs(resp->flags) & 0x000F,
+                ntohs(resp->ancount));
+            print_hex((const unsigned char*)buffer, recvLen);
+
+
+            struct sockaddr_in to_return = log[resp->id];
+
+            // 转发回客户端
+            sendto(sockfd, buffer, recvLen, 0, (struct sockaddr*) & to_return, sizeof(to_return));
+        }
+        else {//默认通过114.114.114.114接收响应
             printf("get message from local %s\n", inet_ntoa(clientAddr.sin_addr));
             printf("recvLen: %d \n", recvLen);
             print_hex((const unsigned char*)buffer, recvLen);
@@ -197,7 +209,7 @@ int main() {
             DNSHeader* dns = (DNSHeader*)buffer;
 
             printf("报头id：%u    ", ntohs(dns->id));
-            printf("源ip地址：%s %d\n", inet_ntoa(clientAddr.sin_addr),clientAddr.sin_port);
+            printf("源ip地址：%s %d\n", inet_ntoa(clientAddr.sin_addr), clientAddr.sin_port);
 
             log[dns->id] = clientAddr;
 
@@ -216,12 +228,12 @@ int main() {
 
 
 
-                if ((int)searchIp > 0) {
+                if ((int)searchIp != 0&&(int)searchIp != -1) {
                     printf("查询到地址,使用本地文件返回响应\n");
 
                     //flags不管
                     dns->ancount = ntohs(1);
-                    dns->flags = dns->flags+128;
+                    dns->flags = dns->flags + 128;
 
                     static const int A_NAME_OFFSET = 0xC00C;
                     static const uint16_t A_TYPE = 1;
@@ -246,12 +258,12 @@ int main() {
                     continue;
                 }
                 else {
-                    if(searchIp==0){
+                    if (searchIp == 0) {
                         printf("查询到0.0.0.0\n");
                         dns->flags += 768;
                         dns->flags += 128;
                         print_hex((const unsigned char*)buffer, recvLen);
-                        sendto(sockfd, buffer, recvLen , 0, (struct sockaddr*) & clientAddr, addrLen);
+                        sendto(sockfd, buffer, recvLen, 0, (struct sockaddr*) & clientAddr, addrLen);
                         continue;
                     }
                 }
@@ -262,23 +274,6 @@ int main() {
             sendto(sockfd, buffer, recvLen, 0,
                 (struct sockaddr*) & dnsServerAddr, sizeof(dnsServerAddr));
             continue;
-        }
-        else {//默认通过114.114.114.114接收响应
-            printf("get message from %s\n", inet_ntoa(clientAddr.sin_addr));
-
-            DNSHeader* resp = (DNSHeader*)buffer;
-
-            printf("[响应] ID=%04x, RCODE=%d, Answer数=%d\n",
-                ntohs(resp->id),
-                ntohs(resp->flags) & 0x000F,
-                ntohs(resp->ancount));
-            print_hex((const unsigned char*)buffer, recvLen);
-
-
-            struct sockaddr_in to_return = log[resp->id];
-
-            // 转发回客户端
-            sendto(sockfd, buffer, recvLen, 0, (struct sockaddr*) & to_return, sizeof(to_return));
         }
        
     }
